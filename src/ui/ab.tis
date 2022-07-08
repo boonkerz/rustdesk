@@ -638,7 +638,7 @@ function getAb() {
                 return;
             }
             var tm = data.updated_at;
-            ab = JSON.parse(data.data);
+            ab = data.data;
             if (!ab.tags) ab.tags = [];
             if (!ab.peers) ab.peers = [];
         }
@@ -650,7 +650,7 @@ function getAb() {
 }
 
 function updateAb() {
-    httpRequest(handler.get_api_server() + "/api/ab", #post, { data: JSON.stringify(ab) }, function(data) {
+    httpRequest(handler.get_api_server() + "/api/ab", #post, { data: ab }, function(data) {
     }, function(err, status) {
     }, getHttpHeaders());
 }

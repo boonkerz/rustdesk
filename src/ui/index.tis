@@ -1075,7 +1075,8 @@ function refreshCurrentUser() {
             handleAbError(data.error);
             return;
         }
-        handler.set_local_option("user_info", JSON.stringify(data));
+        handler.set_local_option("access_token", data.access_token);
+        handler.set_local_option("user_info", JSON.stringify(data.user));
         myIdMenu.update();
         getAb();
     }, function(err, status) {
