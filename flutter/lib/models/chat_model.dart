@@ -1,9 +1,11 @@
-import 'dart:convert';
-
-import 'package:dash_chat/dash_chat.dart';
+import 'package:dash_chat_2/dash_chat_2.dart';
+import 'package:draggable_float_widget/draggable_float_widget.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:window_manager/window_manager.dart';
 
-import '../widgets/overlay.dart';
+import '../common.dart';
+import '../common/widgets/overlay.dart';
 import 'model.dart';
 
 class MessageBody {
@@ -11,8 +13,8 @@ class MessageBody {
   List<ChatMessage> chatMessages;
   MessageBody(this.chatUser, this.chatMessages);
 
-  void add(ChatMessage cm) {
-    this.chatMessages.add(cm);
+  void insert(ChatMessage cm) {
+    this.chatMessages.insert(0, cm);
   }
 
   void clear() {
@@ -23,23 +25,34 @@ class MessageBody {
 class ChatModel with ChangeNotifier {
   static final clientModeID = -1;
 
+  /// _overlayState:
+  /// Desktop: store session overlay by using [setOverlayState].
+  /// Mobile: always null, use global overlay.
+  /// see [_getOverlayState] in [showChatIconOverlay] or [showChatWindowOverlay]
+  OverlayState? _overlayState;
+  OverlayEntry? chatIconOverlayEntry;
+  OverlayEntry? chatWindowOverlayEntry;
+
   final ChatUser me = ChatUser(
-    uid: "",
-    name: "Me",
+    id: "",
+    firstName: "Me",
   );
 
   late final Map<int, MessageBody> _messages = Map()
     ..[clientModeID] = MessageBody(me, []);
 
-  final _scroller = ScrollController();
-
   var _currentID = clientModeID;
-
-  ScrollController get scroller => _scroller;
+  late bool _isShowChatPage = false;
 
   Map<int, MessageBody> get messages => _messages;
 
   int get currentID => _currentID;
+
+  bool get isShowChatPage => _isShowChatPage;
+
+  final WeakReference<FFI> parent;
+
+  ChatModel(this.parent);
 
   ChatUser get currentUser {
     final user = messages[currentID]?.chatUser;
@@ -51,19 +64,132 @@ class ChatModel with ChangeNotifier {
     }
   }
 
+  setOverlayState(OverlayState? os) {
+    _overlayState = os;
+  }
+
+  OverlayState? _getOverlayState() {
+    if (_overlayState == null) {
+      if (globalKey.currentState == null ||
+          globalKey.currentState!.overlay == null) return null;
+      return globalKey.currentState!.overlay;
+    } else {
+      return _overlayState;
+    }
+  }
+
+  showChatIconOverlay({Offset offset = const Offset(200, 50)}) {
+    if (chatIconOverlayEntry != null) {
+      chatIconOverlayEntry!.remove();
+    }
+    // mobile check navigationBar
+    final bar = navigationBarKey.currentWidget;
+    if (bar != null) {
+      if ((bar as BottomNavigationBar).currentIndex == 1) {
+        return;
+      }
+    }
+
+    final overlayState = _getOverlayState();
+    if (overlayState == null) return;
+
+    final overlay = OverlayEntry(builder: (context) {
+      return DraggableFloatWidget(
+          config: DraggableFloatWidgetBaseConfig(
+            initPositionYInTop: false,
+            initPositionYMarginBorder: 100,
+            borderTopContainTopBar: true,
+          ),
+          child: FloatingActionButton(
+              onPressed: () {
+                if (chatWindowOverlayEntry == null) {
+                  showChatWindowOverlay();
+                } else {
+                  hideChatWindowOverlay();
+                }
+              },
+              child: Icon(Icons.message)));
+    });
+    overlayState.insert(overlay);
+    chatIconOverlayEntry = overlay;
+  }
+
+  hideChatIconOverlay() {
+    if (chatIconOverlayEntry != null) {
+      chatIconOverlayEntry!.remove();
+      chatIconOverlayEntry = null;
+    }
+  }
+
+  showChatWindowOverlay() {
+    if (chatWindowOverlayEntry != null) return;
+    final overlayState = _getOverlayState();
+    if (overlayState == null) return;
+    final overlay = OverlayEntry(builder: (context) {
+      return DraggableChatWindow(
+          position: const Offset(20, 80),
+          width: 250,
+          height: 350,
+          chatModel: this);
+    });
+    overlayState.insert(overlay);
+    chatWindowOverlayEntry = overlay;
+  }
+
+  hideChatWindowOverlay() {
+    if (chatWindowOverlayEntry != null) {
+      chatWindowOverlayEntry!.remove();
+      chatWindowOverlayEntry = null;
+      return;
+    }
+  }
+
+  toggleChatOverlay() {
+    if ((!isDesktop && chatIconOverlayEntry == null) ||
+        chatWindowOverlayEntry == null) {
+      gFFI.invokeMethod("enable_soft_keyboard", true);
+      if (!isDesktop) {
+        showChatIconOverlay();
+      }
+      showChatWindowOverlay();
+    } else {
+      hideChatIconOverlay();
+      hideChatWindowOverlay();
+    }
+  }
+
+  toggleCMChatPage(int id) async {
+    if (gFFI.chatModel.currentID != id) {
+      gFFI.chatModel.changeCurrentID(id);
+    }
+    if (_isShowChatPage) {
+      _isShowChatPage = !_isShowChatPage;
+      notifyListeners();
+      await windowManager.setSize(Size(300, 400));
+      await windowManager.setAlignment(Alignment.topRight);
+    } else {
+      await windowManager.setSize(Size(600, 400));
+      await Future.delayed(Duration(milliseconds: 100));
+      await windowManager.setAlignment(Alignment.topRight);
+      _isShowChatPage = !_isShowChatPage;
+      notifyListeners();
+    }
+  }
+
   changeCurrentID(int id) {
     if (_messages.containsKey(id)) {
       _currentID = id;
       notifyListeners();
     } else {
-      final client = FFI.serverModel.clients[id];
+      final client = parent.target?.serverModel.clients
+          .firstWhere((client) => client.id == id);
       if (client == null) {
         return debugPrint(
             "Failed to changeCurrentID,remote user doesn't exist");
       }
       final chatUser = ChatUser(
-        uid: client.peerId,
-        name: client.name,
+        id: client.peerId,
+        firstName: client.name,
       );
       _messages[id] = MessageBody(chatUser, []);
       _currentID = id;
@@ -71,62 +197,68 @@ class ChatModel with ChangeNotifier {
     }
   }
 
-  receive(int id, String text) {
+  receive(int id, String text) async {
     if (text.isEmpty) return;
-    // first message show overlay icon
+    // mobile: first message show overlay icon
     if (chatIconOverlayEntry == null) {
       showChatIconOverlay();
     }
+    // desktop: show chat page
+    if (!_isShowChatPage) {
+      toggleCMChatPage(id);
+    }
+    parent.target?.serverModel.jumpTo(id);
+
     late final chatUser;
     if (id == clientModeID) {
       chatUser = ChatUser(
-        name: FFI.ffiModel.pi.username,
-        uid: FFI.getId(),
+        firstName: parent.target?.ffiModel.pi.username,
+        id: await bind.mainGetLastRemoteId(),
       );
     } else {
-      final client = FFI.serverModel.clients[id];
+      final client = parent.target?.serverModel.clients
+          .firstWhere((client) => client.id == id);
       if (client == null) {
         return debugPrint("Failed to receive msg,user doesn't exist");
       }
-      chatUser = ChatUser(uid: client.peerId, name: client.name);
+      if (isDesktop) {
+        window_on_top(null);
+        var index = parent.target?.serverModel.clients
+            .indexWhere((client) => client.id == id);
+        if (index != null && index >= 0) {
+          gFFI.serverModel.tabController.jumpTo(index);
+        }
+      }
+      chatUser = ChatUser(id: client.peerId, firstName: client.name);
     }
 
     if (!_messages.containsKey(id)) {
       _messages[id] = MessageBody(chatUser, []);
     }
-    _messages[id]!.add(ChatMessage(text: text, user: chatUser));
+    _messages[id]!.insert(
+        ChatMessage(text: text, user: chatUser, createdAt: DateTime.now()));
     _currentID = id;
     notifyListeners();
-    scrollToBottom();
-  }
-
-  scrollToBottom() {
-    Future.delayed(Duration(milliseconds: 500), () {
-      _scroller.animateTo(_scroller.position.maxScrollExtent,
-          duration: Duration(milliseconds: 200),
-          curve: Curves.fastLinearToSlowEaseIn);
-    });
   }
 
   send(ChatMessage message) {
-    if (message.text != null && message.text!.isNotEmpty) {
-      _messages[_currentID]?.add(message);
+    if (message.text.isNotEmpty) {
+      _messages[_currentID]?.insert(message);
       if (_currentID == clientModeID) {
-        FFI.setByName("chat_client_mode", message.text!);
+        if (parent.target != null) {
+          bind.sessionSendChat(id: parent.target!.id, text: message.text);
+        }
       } else {
-        final msg = Map()
-          ..["id"] = _currentID
-          ..["text"] = message.text!;
-        FFI.setByName("chat_server_mode", jsonEncode(msg));
+        bind.cmSendChat(connId: _currentID, msg: message.text);
       }
     }
     notifyListeners();
-    scrollToBottom();
   }
 
   close() {
     hideChatIconOverlay();
     hideChatWindowOverlay();
+    _overlayState = null;
     notifyListeners();
   }
 

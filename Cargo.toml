@@ -1,6 +1,6 @@
 [package]
 name = "rustdesk"
-version = "1.1.10"
+version = "1.2.0"
 authors = ["rustdesk <info@rustdesk.com>"]
 edition = "2021"
 build= "build.rs"
@@ -21,17 +21,20 @@ hbbs = []
 cli = []
 with_rc = ["simple_rc"]
 appimage = []
+flatpak = []
 use_samplerate = ["samplerate"]
 use_rubato = ["rubato"]
 use_dasp = ["dasp"]
-hwcodec = ["scrap/hwcodec"]
+flutter = ["flutter_rust_bridge"]
 default = ["use_dasp"]
+hwcodec = ["scrap/hwcodec"]
+mediacodec = ["scrap/mediacodec"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 whoami = "1.2"
-scrap = { path = "libs/scrap" }
+scrap = { path = "libs/scrap", features = ["wayland"] }
 hbb_common = { path = "libs/hbb_common" }
 serde_derive = "1.0"
 serde = "1.0"
@@ -44,17 +47,23 @@ libc = "0.2"
 parity-tokio-ipc = { git = "https://github.com/open-trade/parity-tokio-ipc" }
 flexi_logger = { version = "0.22", features = ["async", "use_chrono_for_offset"] }
 runas = "0.2"
-magnum-opus = { git = "https://github.com/open-trade/magnum-opus" }
+magnum-opus = { git = "https://github.com/SoLongAndThanksForAllThePizza/magnum-opus" }
 dasp = { version = "0.11", features = ["signal", "interpolate-linear", "interpolate"], optional = true }
 rubato = { version = "0.12", optional = true }
 samplerate = { version = "0.2", optional = true }
 async-trait = "0.1"
 uuid = { version = "1.0", features = ["v4"] }
 clap = "3.0"
-rpassword = "6.0"
+rpassword = "7.0"
 base64 = "0.13"
-sysinfo = "0.23"
+sysinfo = "0.24"
 num_cpus = "1.13"
+bytes = { version = "1.2", features = ["serde"] }
+default-net = "0.11.0"
+wol-rs = "0.9.1"
+flutter_rust_bridge = { git = "https://github.com/SoLongAndThanksForAllThePizza/flutter_rust_bridge", optional = true }
+errno = "0.2.8"
+rdev = { git = "https://github.com/asur4s/rdev" }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features=false }
@@ -67,22 +76,22 @@ machine-uid = "0.2"
 mac_address = "1.1"
 sciter-rs = { git = "https://github.com/open-trade/rust-sciter", branch = "dyn" }
 sys-locale = "0.2"
-enigo = { path = "libs/enigo" }
+enigo = { path = "libs/enigo", features = [ "with_serde" ] }
 clipboard = { path = "libs/clipboard" }
-rdev = { git = "https://github.com/open-trade/rdev" }
 ctrlc = "3.2"
 arboard = "2.0"
 #minreq = { version = "2.4", features = ["punycode", "https-native"] }
+system_shutdown = "3.0.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 #systray = { git = "https://github.com/open-trade/systray-rs" }
-trayicon = { version = "0.1", features = ["winit"] }
-# > 0.25 not work with trayicon
-winit = "0.25"
+trayicon = { git = "https://github.com/open-trade/trayicon-rs", features = ["winit"] }
+winit = "0.26"
 winapi = { version = "0.3", features = ["winuser"] }
 winreg = "0.10"
 windows-service = "0.4"
 virtual_display = { path = "libs/virtual_display" }
+impersonate_system = { git = "https://github.com/21pages/impersonate-system" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
@@ -92,22 +101,26 @@ core-foundation = "0.9"
 core-graphics = "0.22"
 include_dir = "0.7.2"
 tray-item = "0.7" # looks better than trayicon
+dark-light = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 psimple = { package = "libpulse-simple-binding", version = "2.25" }
 pulse = { package = "libpulse-binding", version = "2.26" }
 rust-pulsectl = { git = "https://github.com/open-trade/pulsectl" }
 async-process = "1.3"
+mouce = { git="https://github.com/fufesou/mouce.git" }
+evdev = { git="https://github.com/fufesou/evdev" }
+
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.11"
-jni = "0.19.0"
+jni = "0.19"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-flutter_rust_bridge = "1.30.0"
+flutter_rust_bridge = { git = "https://github.com/SoLongAndThanksForAllThePizza/flutter_rust_bridge" }
 
 [workspace]
-members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/simple_rc"]
+members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/simple_rc", "libs/portable"]
 
 [package.metadata.winres]
 LegalCopyright = "Copyright © 2022 Purslane, Inc."
@@ -122,18 +135,18 @@ winapi = { version = "0.3", features = [ "winnt" ] }
 cc = "1.0"
 hbb_common = { path = "libs/hbb_common" }
 simple_rc = { path = "libs/simple_rc", optional = true }
-flutter_rust_bridge_codegen = "1.30.0"
+flutter_rust_bridge_codegen = { git = "https://github.com/SoLongAndThanksForAllThePizza/flutter_rust_bridge" }
 
 [dev-dependencies]
-hound = "3.4"
+hound = "3.5"
 
 [package.metadata.bundle]
 name = "RustDesk"
 identifier = "com.carriez.rustdesk"
-icon = ["32x32.png", "128x128.png", "128x128@2x.png"]
-deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "pulseaudio", "python3-pip", "curl"]
+icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
+deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "pipewire", "curl"]
 osx_minimum_system_version = "10.14"
-resources = ["mac-tray.png"]
+resources = ["res/mac-tray-light.png","res/mac-tray-dark.png"]
 
 #https://github.com/johnthagen/min-sized-rust
 [profile.release]

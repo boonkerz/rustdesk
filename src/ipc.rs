@@ -1,4 +1,13 @@
-use crate::rendezvous_mediator::RendezvousMediator;
+use std::{collections::HashMap, sync::atomic::Ordering};
+#[cfg(not(windows))]
+use std::{fs::File, io::prelude::*};
+
+use bytes::Bytes;
+use parity_tokio_ipc::{
+    Connection as Conn, ConnectionClient as ConnClient, Endpoint, Incoming, SecurityAttributes,
+};
+use serde_derive::{Deserialize, Serialize};
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use clipboard::ClipbaordFile;
 use hbb_common::{
@@ -7,18 +16,13 @@ use hbb_common::{
     config::{self, Config, Config2},
     futures::StreamExt as _,
     futures_util::sink::SinkExt,
-    log, timeout, tokio,
+    log, password_security as password, timeout, tokio,
     tokio::io::{AsyncRead, AsyncWrite},
     tokio_util::codec::Framed,
     ResultType,
 };
-use parity_tokio_ipc::{
-    Connection as Conn, ConnectionClient as ConnClient, Endpoint, Incoming, SecurityAttributes,
-};
-use serde_derive::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::atomic::Ordering};
-#[cfg(not(windows))]
-use std::{fs::File, io::prelude::*};
+
+use crate::rendezvous_mediator::RendezvousMediator;
 
 // State with timestamp, because std::time::Instant cannot be serialized
 #[derive(Debug, Serialize, Deserialize, Copy, Clone)]
@@ -56,6 +60,7 @@ pub enum FS {
         id: i32,
         file_num: i32,
         files: Vec<(String, u64)>,
+        overwrite_detection: bool,
     },
     CancelWrite {
         id: i32,
@@ -63,7 +68,7 @@ pub enum FS {
     WriteBlock {
         id: i32,
         file_num: i32,
-        data: Vec<u8>,
+        data: Bytes,
         compressed: bool,
     },
     WriteDone {
@@ -84,6 +89,47 @@ pub enum FS {
     },
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "t", content = "c")]
+pub enum DataKeyboard {
+    Sequence(String),
+    KeyDown(enigo::Key),
+    KeyUp(enigo::Key),
+    KeyClick(enigo::Key),
+    GetKeyState(enigo::Key),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "t", content = "c")]
+pub enum DataKeyboardResponse {
+    GetKeyState(bool),
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "t", content = "c")]
+pub enum DataMouse {
+    MoveTo(i32, i32),
+    MoveRelative(i32, i32),
+    Down(enigo::MouseButton),
+    Up(enigo::MouseButton),
+    Click(enigo::MouseButton),
+    ScrollX(i32),
+    ScrollY(i32),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "t", content = "c")]
+pub enum DataControl {
+    Resolution {
+        minx: i32,
+        maxx: i32,
+        miny: i32,
+        maxy: i32,
+    },
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
 pub enum Data {
@@ -99,6 +145,8 @@ pub enum Data {
         audio: bool,
         file: bool,
         file_transfer_enabled: bool,
+        restart: bool,
+        recording: bool,
     },
     ChatMessage {
         text: String,
@@ -127,6 +175,18 @@ pub enum Data {
     ClipbaordFile(ClipbaordFile),
     ClipboardFileEnabled(bool),
     PrivacyModeState((i32, PrivacyModeState)),
+    TestRendezvousServer,
+    #[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
+    Keyboard(DataKeyboard),
+    #[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
+    KeyboardResponse(DataKeyboardResponse),
+    #[cfg(not(any(target_os = "android", target_os = "ios", feature = "cli")))]
+    Mouse(DataMouse),
+    Control(DataControl),
+    Theme(String),
+    Language(String),
+    Empty,
+    Disconnected,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -281,12 +341,18 @@ async fn handle(data: Data, stream: &mut Connection) {
                 let value;
                 if name == "id" {
                     value = Some(Config::get_id());
-                } else if name == "password" {
-                    value = Some(Config::get_password());
+                } else if name == "temporary-password" {
+                    value = Some(password::temporary_password());
+                } else if name == "permanent-password" {
+                    value = Some(Config::get_permanent_password());
                 } else if name == "salt" {
                     value = Some(Config::get_salt());
                 } else if name == "rendezvous_server" {
-                    value = Some(Config::get_rendezvous_server());
+                    value = Some(format!(
+                        "{},{}",
+                        Config::get_rendezvous_server(),
+                        Config::get_rendezvous_servers().join(",")
+                    ));
                 } else if name == "rendezvous_servers" {
                     value = Some(Config::get_rendezvous_servers().join(","));
                 } else {
@@ -298,8 +364,10 @@ async fn handle(data: Data, stream: &mut Connection) {
                 if name == "id" {
                     Config::set_key_confirmed(false);
                     Config::set_id(&value);
-                } else if name == "password" {
-                    Config::set_password(&value);
+                } else if name == "temporary-password" {
+                    password::update_temporary_password();
+                } else if name == "permanent-password" {
+                    Config::set_permanent_password(&value);
                 } else if name == "salt" {
                     Config::set_salt(&value);
                 } else {
@@ -336,7 +404,9 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .await
             );
         }
-
+        Data::TestRendezvousServer => {
+            crate::test_rendezvous_server();
+        }
         _ => {}
     }
 }
@@ -345,6 +415,83 @@ pub async fn connect(ms_timeout: u64, postfix: &str) -> ResultType<ConnectionTmp
     let path = Config::ipc_path(postfix);
     let client = timeout(ms_timeout, Endpoint::connect(&path)).await??;
     Ok(ConnectionTmpl::new(client))
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::main(flavor = "current_thread")]
+pub async fn start_pa() {
+    use crate::audio_service::AUDIO_DATA_SIZE_U8;
+
+    match new_listener("_pa").await {
+        Ok(mut incoming) => {
+            loop {
+                if let Some(result) = incoming.next().await {
+                    match result {
+                        Ok(stream) => {
+                            let mut stream = Connection::new(stream);
+                            let mut device: String = "".to_owned();
+                            if let Some(Ok(Some(Data::Config((_, Some(x)))))) =
+                                stream.next_timeout2(1000).await
+                            {
+                                device = x;
+                            }
+                            if !device.is_empty() {
+                                device = crate::platform::linux::get_pa_source_name(&device);
+                            }
+                            if device.is_empty() {
+                                device = crate::platform::linux::get_pa_monitor();
+                            }
+                            if device.is_empty() {
+                                continue;
+                            }
+                            let spec = pulse::sample::Spec {
+                                format: pulse::sample::Format::F32le,
+                                channels: 2,
+                                rate: crate::platform::PA_SAMPLE_RATE,
+                            };
+                            log::info!("pa monitor: {:?}", device);
+                            // systemctl --user status pulseaudio.service
+                            let mut buf: Vec<u8> = vec![0; AUDIO_DATA_SIZE_U8];
+                            match psimple::Simple::new(
+                                None,                             // Use the default server
+                                &crate::get_app_name(),           // Our application’s name
+                                pulse::stream::Direction::Record, // We want a record stream
+                                Some(&device),                    // Use the default device
+                                "record",                         // Description of our stream
+                                &spec,                            // Our sample format
+                                None,                             // Use default channel map
+                                None, // Use default buffering attributes
+                            ) {
+                                Ok(s) => loop {
+                                    if let Ok(_) = s.read(&mut buf) {
+                                        let out =
+                                            if buf.iter().filter(|x| **x != 0).next().is_none() {
+                                                vec![]
+                                            } else {
+                                                buf.clone()
+                                            };
+                                        if let Err(err) = stream.send_raw(out.into()).await {
+                                            log::error!("Failed to send audio data:{}", err);
+                                            break;
+                                        }
+                                    }
+                                },
+                                Err(err) => {
+                                    log::error!("Could not create simple pulse: {}", err);
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            log::error!("Couldn't get pa client: {:?}", err);
+                        }
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            log::error!("Failed to start pa ipc server: {}", err);
+        }
+    }
 }
 
 #[inline]
@@ -448,8 +595,8 @@ where
         }
     }
 
-    pub async fn send_raw(&mut self, data: Vec<u8>) -> ResultType<()> {
-        self.inner.send(bytes::Bytes::from(data)).await?;
+    pub async fn send_raw(&mut self, data: Bytes) -> ResultType<()> {
+        self.inner.send(data).await?;
         Ok(())
     }
 
@@ -490,9 +637,22 @@ pub async fn set_config(name: &str, value: String) -> ResultType<()> {
     set_config_async(name, value).await
 }
 
-pub fn set_password(v: String) -> ResultType<()> {
-    Config::set_password(&v);
-    set_config("password", v)
+pub fn update_temporary_password() -> ResultType<()> {
+    set_config("temporary-password", "".to_owned())
+}
+
+pub fn get_permanent_password() -> String {
+    if let Ok(Some(v)) = get_config("permanent-password") {
+        Config::set_permanent_password(&v);
+        v
+    } else {
+        Config::get_permanent_password()
+    }
+}
+
+pub fn set_permanent_password(v: String) -> ResultType<()> {
+    Config::set_permanent_password(&v);
+    set_config("permanent-password", v)
 }
 
 pub fn get_id() -> String {
@@ -511,20 +671,17 @@ pub fn get_id() -> String {
     }
 }
 
-pub fn get_password() -> String {
-    if let Ok(Some(v)) = get_config("password") {
-        Config::set_password(&v);
-        v
-    } else {
-        Config::get_password()
-    }
-}
-
-pub async fn get_rendezvous_server(ms_timeout: u64) -> String {
+pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>) {
     if let Ok(Some(v)) = get_config_async("rendezvous_server", ms_timeout).await {
-        v
+        let mut urls = v.split(",");
+        let a = urls.next().unwrap_or_default().to_owned();
+        let b: Vec<String> = urls.map(|x| x.to_owned()).collect();
+        (a, b)
     } else {
-        Config::get_rendezvous_server()
+        (
+            Config::get_rendezvous_server(),
+            Config::get_rendezvous_servers(),
+        )
     }
 }
 
@@ -634,5 +791,12 @@ pub async fn set_socks(value: config::Socks5Server) -> ResultType<()> {
         .await?
         .send(&Data::Socks(Some(value)))
         .await?;
+    Ok(())
+}
+
+#[tokio::main(flavor = "current_thread")]
+pub async fn test_rendezvous_server() -> ResultType<()> {
+    let mut c = connect(1000, "").await?;
+    c.send(&Data::TestRendezvousServer).await?;
     Ok(())
 }

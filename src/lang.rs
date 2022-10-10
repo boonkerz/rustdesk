@@ -9,13 +9,20 @@ mod en;
 mod eo;
 mod es;
 mod fr;
+mod hu;
 mod id;
 mod it;
+mod ja;
+mod ko;
+mod pl;
 mod ptbr;
 mod ru;
 mod sk;
 mod tr;
 mod tw;
+mod vn;
+mod kz;
+mod ua;
 
 lazy_static::lazy_static! {
     pub static ref LANGS: Value =
@@ -28,6 +35,7 @@ lazy_static::lazy_static! {
             ("tw", "繁體中文"),
             ("pt", "Português"),
             ("es", "Español"),
+            ("hu", "Magyar"),
             ("ru", "Русский"),
             ("sk", "Slovenčina"),
             ("id", "Indonesia"),
@@ -35,6 +43,12 @@ lazy_static::lazy_static! {
             ("da", "Dansk"),
             ("eo", "Esperanto"),
             ("tr", "Türkçe"),
+            ("vn", "Tiếng Việt"),
+            ("pl", "Polski"),
+            ("ja", "日本語"),
+            ("ko", "한국어"),
+            ("kz", "Қазақ"),
+            ("ua", "Українська"),
         ]);
 }
 
@@ -68,6 +82,7 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "tw" => tw::T.deref(),
         "de" => de::T.deref(),
         "es" => es::T.deref(),
+        "hu" => hu::T.deref(),
         "ru" => ru::T.deref(),
         "eo" => eo::T.deref(),
         "id" => id::T.deref(),
@@ -78,16 +93,24 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "cs" => cs::T.deref(),
         "da" => da::T.deref(),
         "sk" => sk::T.deref(),
+        "vn" => vn::T.deref(),
+        "pl" => pl::T.deref(),
+        "ja" => ja::T.deref(),
+        "ko" => ko::T.deref(),
+        "kz" => kz::T.deref(),
+        "ua" => ua::T.deref(),
         _ => en::T.deref(),
     };
     if let Some(v) = m.get(&name as &str) {
-        v.to_string()
-    } else {
-        if lang != "en" {
-            if let Some(v) = en::T.get(&name as &str) {
-                return v.to_string();
+        if v.is_empty() {
+            if lang != "en" {
+                if let Some(v) = en::T.get(&name as &str) {
+                    return v.to_string();
+                }
             }
+        } else {
+            return v.to_string();
         }
-        name
     }
+    name
 }

@@ -276,7 +276,7 @@ impl TransferJob {
         show_hidden: bool,
         is_remote: bool,
         files: Vec<FileEntry>,
-        enable_override_detection: bool,
+        enable_overwrite_detection: bool,
     ) -> Self {
         log::info!("new write {}", path);
         let total_size = files.iter().map(|x| x.size as u64).sum();
@@ -289,7 +289,7 @@ impl TransferJob {
             is_remote,
             files,
             total_size,
-            enable_overwrite_detection: enable_override_detection,
+            enable_overwrite_detection,
             ..Default::default()
         }
     }
@@ -301,7 +301,7 @@ impl TransferJob {
         file_num: i32,
         show_hidden: bool,
         is_remote: bool,
-        enable_override_detection: bool,
+        enable_overwrite_detection: bool,
     ) -> ResultType<Self> {
         log::info!("new read {}", path);
         let files = get_recursive_files(&path, show_hidden)?;
@@ -315,7 +315,7 @@ impl TransferJob {
             is_remote,
             files,
             total_size,
-            enable_overwrite_detection: enable_override_detection,
+            enable_overwrite_detection,
             ..Default::default()
         })
     }
@@ -573,7 +573,7 @@ impl TransferJob {
             log::info!("file num truncated, ignoring");
         } else {
             match r.union {
-                Some(file_transfer_send_confirm_request::Union::skip(s)) => {
+                Some(file_transfer_send_confirm_request::Union::Skip(s)) => {
                     if s {
                         log::debug!("skip file id:{}, file_num:{}", r.id, r.file_num);
                         self.skip_current_file();
@@ -581,7 +581,7 @@ impl TransferJob {
                         self.set_file_confirmed(true);
                     }
                 }
-                Some(file_transfer_send_confirm_request::Union::offset_blk(_offset)) => {
+                Some(file_transfer_send_confirm_request::Union::OffsetBlk(_offset)) => {
                     self.set_file_confirmed(true);
                 }
                 _ => {}
